@@ -1,0 +1,192 @@
+_schema-version: "3.2"
+ID: MyApp
+version: 1.0.1
+modules:
+- name: MyApp-srv
+  type: nodejs
+  path: gen/srv
+  requires:
+  - name: MyApp-uaa
+  - name: MyApp-dest
+  - name: MyApp-registry
+  - name: MyApp-sm
+  - name: app-api
+    properties:
+      APP_PROTOCOL: ~{app-protocol}
+      APP_URI: ~{app-uri}
+  provides:
+  - name: srv-api
+    properties:
+      srv-url: ${default-url}
+  - name: mtx-api
+    properties:
+      mtx-url: ${default-url}
+  parameters:
+    buildpack: nodejs_buildpack
+    disk-quota: 1024M
+    memory: 512M
+  build-parameters:
+    ignore:
+    - default-*.json
+    - .env
+    - '*node_modules*'
+    - package-lock.json
+- name: MyApp-app
+  type: approuter.nodejs
+  path: app
+  properties:
+    TENANT_HOST_PATTERN: ^(.*)-${default-uri}
+  requires:
+  - name: MyApp-uaa
+  - name: srv-api
+    group: destinations
+    properties:
+      forwardAuthToken: true
+      name: srv
+      timeout: 600000
+      url: ~{srv-url}
+  - name: mtx-api
+    group: destinations
+    properties:
+      name: mtx
+      timeout: 600000
+      url: ~{mtx-url}
+  - name: MyApp-dest
+    group: destinations
+    properties:
+      forwardAuthToken: false
+      name: ui5
+      url: https://ui5.sap.com
+  provides:
+  - name: app-api
+    properties:
+      app-protocol: ${protocol}
+      app-uri: ${default-uri}
+  parameters:
+    disk-quota: 1024M
+    keep-existing-routes: true
+    memory: 256M
+  build-parameters:
+    ignore:
+    - default-*.json
+    - .env
+    - '*node_modules*'
+    - package-lock.json
+- name: MyApp-app-content
+  type: com.sap.application.content
+  path: .
+  requires:
+  - name: MyApp-repo-host
+    parameters:
+      content-target: true
+  build-parameters:
+    build-result: resources
+    requires:
+    - artifacts:
+      - project1.zip
+      name: project1
+      target-path: resources/
+    - artifacts:
+      - project2.zip
+      name: project2
+      target-path: resources/
+- name: project1
+  type: html5
+  path: app/resources/project1
+  build-parameters:
+    build-result: dist
+    builder: custom
+    commands:
+    - npm install
+    - npm run build:cf
+    supported-platforms: []
+- name: project2
+  type: html5
+  path: app/resources/project2
+  build-parameters:
+    build-result: dist
+    builder: custom
+    commands:
+    - npm install
+    - npm run build:cf
+    supported-platforms: []
+resources:
+- name: MyApp-uaa
+  type: org.cloudfoundry.managed-service
+  parameters:
+    path: ./xs-security.json
+    service: xsuaa
+    service-plan: application
+- name: MyApp-dest
+  type: org.cloudfoundry.managed-service
+  parameters:
+    config:
+      HTML5Runtime_enabled: false
+      init_data:
+        instance:
+          destinations:
+          - Authentication: OAuth2Password
+            Description: CF Cloud Controller API
+            Name: MyApp-cfapi
+            Password: <SetValueInCockpit>
+            ProxyType: Internet
+            Type: HTTP
+            URL: ${controller-url}
+            User: <SetValueInCockpit>
+            clientId: cf
+            clientSecret: null
+            tokenServiceURL: ${authorization-url}/oauth/token
+          - Authentication: NoAuthentication
+            Name: ui5
+            ProxyType: Internet
+            Type: HTTP
+            URL: https://ui5.sap.com
+          existing_destinations_policy: ignore
+      version: 1.0.0
+    service: destination
+    service-plan: lite
+- name: MyApp-registry
+  type: org.cloudfoundry.managed-service
+  parameters:
+    config:
+      appName: MyApp
+      appUrls:
+        callbackTimeoutMillis: 300000
+        onSubscription: ~{mtx-api/mtx-url}/-/cds/saas-provisioning/tenant/{tenantId}
+        onSubscriptionAsync: false
+        onUnSubscriptionAsync: false
+      category: Prueba Multitenant
+      description: My App Multitenant
+      displayName: My App
+      xsappname: MyApp
+    service: saas-registry
+    service-name: MyApp-registry
+    service-plan: application
+  requires:
+  - name: mtx-api
+- name: MyApp-sm
+  type: org.cloudfoundry.managed-service
+  parameters:
+    config:
+      acquireTimeoutMillis: max
+      polling_timeout_seconds: 480
+    polling_timeout_seconds: 240
+    service: service-manager
+    service-plan: container
+  requires:
+  - name: MyApp-uaa
+- name: MyApp-repo-host
+  type: org.cloudfoundry.managed-service
+  parameters:
+    service: html5-apps-repo
+    service-name: MyApp-html5-srv
+    service-plan: app-host
+parameters:
+  deploy_mode: html5-repo
+  enable-parallel-deployments: true
+build-parameters:
+  before-all:
+  - builder: custom
+    commands:
+    - npm install --production
+    - npx -p @sap/cds-dk cds build --production
